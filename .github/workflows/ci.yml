@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  functions:
+    name: Cloud Functions tip denetimi
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: school-comm/functions
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: school-comm/functions/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  rules:
+    name: Güvenlik kuralları
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: school-comm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: school-comm/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: npm ci
+      - run: npm run test:rules
+      - run: npm run test:storage
+
+  flutter:
+    name: Flutter (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [packages/school_comm, admin_app, student_app]
+    defaults:
+      run:
+        working-directory: school-comm/${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --fatal-infos
+      - run: flutter test
+        if: matrix.app == 'packages/school_comm'

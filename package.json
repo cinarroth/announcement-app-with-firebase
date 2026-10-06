@@ -1,0 +1,23 @@
+{
+  "name": "school-comm",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Firebase tabanlı duyuru / grup / öğrenci iletişim sistemi",
+  "scripts": {
+    "emulators": "firebase emulators:start",
+    "test:rules": "firebase emulators:exec --only firestore,auth \"npm run test:rules:run\"",
+    "test:rules:run": "mocha tests/rules/security.test.mjs --timeout 20000",
+    "test:storage": "firebase emulators:exec --only firestore,storage \"npm run test:storage:run\"",
+    "test:storage:run": "mocha tests/rules/storage.test.mjs --timeout 20000",
+    "typecheck:functions": "npm --prefix functions run build",
+    "build:all": "node scripts/verify.mjs",
+    "deploy": "npm run typecheck:functions && firebase deploy",
+    "set-admin": "node scripts/set-first-admin.mjs"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.2.0",
+    "firebase-tools": "^13.31.1",
+    "mocha": "^11.0.1"
+  }
+}

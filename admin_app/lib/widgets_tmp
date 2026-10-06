@@ -1,0 +1,163 @@
+import 'package:flutter/material.dart';
+import 'package:school_comm/school_comm.dart';
+
+/// Sohbet balonu — kendi mesajları sağda, diğerleri solda.
+class MessageBubble extends StatelessWidget {
+  const MessageBubble({
+    super.key,
+    required this.message,
+    required this.isMine,
+    this.onDelete,
+  });
+
+  final GroupMessage message;
+  final bool isMine;
+  final VoidCallback? onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final isAdmin = message.senderRole == 'admin';
+
+    return Align(
+      alignment: isMine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isMine ? scheme.primary : scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(isMine ? 16 : 4),
+            bottomRight: Radius.circular(isMine ? 4 : 16),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!isMine)
+              Row(
+                children: [
+                  Text(
+                    message.senderName.isEmpty ? 'Üye' : message.senderName,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: scheme.primary,
+                    ),
+                  ),
+                  if (isAdmin) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: scheme.tertiary.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'YÖNETİCİ',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w800,
+                          color: scheme.tertiary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            if (message.content.isNotEmpty) ...[
+              if (!isMine) const SizedBox(height: 4),
+              Text(
+                message.content,
+                style: TextStyle(color: isMine ? scheme.onPrimary : scheme.onSurface),
+              ),
+            ],
+            for (final attachment in message.attachments) ...[
+              const SizedBox(height: 8),
+              _AttachmentBubble(attachment: attachment, isMine: isMine),
+            ],
+            const SizedBox(height: 6),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Text(
+                  AppDate.time(message.createdAt),
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: (isMine ? scheme.onPrimary : scheme.onSurfaceVariant)
+                        .withValues(alpha: 0.8),
+                  ),
+                ),
+                if (onDelete != null)
+                  IconButton(
+                    onPressed: onDelete,
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 16,
+                    color: (isMine ? scheme.onPrimary : scheme.onSurfaceVariant)
+                        .withValues(alpha: 0.8),
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttachmentBubble extends StatelessWidget {
+  const _AttachmentBubble({required this.attachment, required this.isMine});
+
+  final Attachment attachment;
+  final bool isMine;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    if (attachment.isImage) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.network(
+          attachment.url,
+          height: 160,
+          width: double.infinity,
+          fit: BoxFit.cover,
+          loadingBuilder: (context, child, progress) =>
+              progress == null ? child : const SizedBox(height: 160, child: AppLoading()),
+          errorBuilder: (_, __, ___) => SizedBox(
+            height: 60,
+            child: Center(child: Icon(Icons.broken_image_rounded, color: scheme.error)),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: (isMine ? scheme.onPrimary : scheme.onSurface).withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.insert_drive_file_rounded, size: 18, color: scheme.onSurface),
+          const SizedBox(width: 6),
+          Flexible(
+            child: Text(
+              attachment.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

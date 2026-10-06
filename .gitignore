@@ -1,0 +1,36 @@
+# Dart / Flutter
+.dart_tool/
+build/
+.packages
+**/doc/api/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/ios/Flutter/.last_build_id
+
+# Flutter CLI'nin ürettiği yerel SDK yolları
+**/android/local.properties
+
+# Node
+node_modules/
+npm-debug.log*
+
+# TypeScript derleme çıktısı
+functions/lib/
+
+# Firebase yerel çıktıları
+.firebase/
+*-debug.log
+
+# firebase use --add ile oluşur, projeye özeldir
+.firebaserc
+
+# Gizliler — asla commit edilmemeli
+service-account.json
+.env
+.env.*
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store

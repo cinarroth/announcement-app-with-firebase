@@ -1,0 +1,216 @@
+rules_version = '2';
+
+// Roller custom claim'den gelir ama tek başına güvenilmez: token bayat
+// kalabilir. O yüzden her yetki kontrolünde claim + users dokümanı birlikte
+// doğrulanır. Grup üyeliğinde de aynı fikir: tek gerçek kaynak
+// groups/{gid}/members/{uid}, users/{uid}.groupIds ise sadece kuralların
+// O(1) hasAny() ile sorgu yapabilmesini sağlayan bir ayna (Cloud Functions
+// yazar). Ayrıntı: docs/ARCHITECTURE.md
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    // Claim + doküman + aktiflik, üçü birden.
+    function isAdmin() {
+      return signedIn()
+             && request.auth.token.role == 'admin'
+             && exists(userPath(request.auth.uid))
+             && get(userPath(request.auth.uid)).data.role == 'admin'
+             && get(userPath(request.auth.uid)).data.isActive == true;
+    }
+
+    // Pasif hesap kendi verisini bile okuyamaz.
+    function isActiveUser() {
+      return signedIn()
+             && exists(userPath(request.auth.uid))
+             && get(userPath(request.auth.uid)).data.isActive == true;
+    }
+
+    function myGroupIds() {
+      return get(userPath(request.auth.uid)).data.groupIds;
+    }
+
+    // Kurallar içinde "kullanıcının gruplarını sorgula" yazılamadığı için
+    // ayna array'e bakıyoruz; bu, token'daki bayat groupIds değil.
+    function isGroupMember(groupId) {
+      return isActiveUser() && groupId in myGroupIds();
+    }
+
+    // Öğrencinin kendi dokümanında değiştirebildiği tek alanlar; role,
+    // groupIds, isActive, email buraya dahil değil.
+    function onlySelfEditable(userId) {
+      return isSelf(userId)
+             && request.resource.data.diff(resource.data).affectedKeys()
+                  .hasOnly(['name', 'surname', 'profileImage', 'phone', 'updatedAt']);
+    }
+
+    function validAnnouncement(data) {
+      return data.title is string
+             && data.title.size() > 0
+             && data.title.size() <= 200
+             && data.content is string
+             && data.content.size() <= 10000
+             && data.targetGroupIds is list
+             && data.targetGroupIds.size() <= 50;
+    }
+
+    // Yayında mı, süresi geçmemiş mi, kullanıcı hedefte mi?
+    function canReadAnnouncement(data) {
+      return isAdmin()
+             || (isActiveUser()
+                 && data.publishedAt <= request.time
+                 && (data.expiresAt == null || data.expiresAt > request.time)
+                 && (data.targetGroupIds.size() == 0
+                     || data.targetGroupIds.hasAny(myGroupIds())));
+    }
+
+    match /users/{userId} {
+      // isActiveUser() şartı burada olmasa pasifleştirilmiş hesap kendi
+      // dokümanını okumaya devam ederdi.
+      allow read: if isAdmin() || (isActiveUser() && isSelf(userId));
+
+      // Oluşturma sadece beforeUserCreated trigger'ında.
+      allow create: if false;
+
+      allow update: if isAdmin() || onlySelfEditable(userId);
+      allow delete: if isAdmin();
+
+      match /devices/{deviceId} {
+        allow read: if isAdmin() || (isActiveUser() && isSelf(userId));
+        allow create, update: if isActiveUser()
+                              && isSelf(userId)
+                              && request.resource.data.fcmToken is string
+                              && request.resource.data.fcmToken.size() > 10;
+        // Pasif kullanıcı yeni token yazamaz ama mevcut cihazını silebilir.
+        allow delete: if isAdmin() || isSelf(userId);
+      }
+
+      // Okundu aynası: kendi kaydı, bir kez yazılır.
+      match /announcementReads/{announcementId} {
+        allow read: if isAdmin() || (isActiveUser() && isSelf(userId));
+        allow create: if isActiveUser()
+                      && isSelf(userId)
+                      && request.resource.data.announcementId == announcementId
+                      && request.resource.data.userId == request.auth.uid
+                      && request.resource.data.readAt == request.time;
+        allow update, delete: if isAdmin();
+      }
+
+      // Bildirimler sunucu dışından yazılamaz.
+      match /notifications/{notificationId} {
+        allow read: if isAdmin() || (isActiveUser() && isSelf(userId));
+        allow write: if false;
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /groups/{groupId} {
+      allow read: if isAdmin() || isGroupMember(groupId);
+
+      // Silme callable üzerinden gider (alt-koleksiyonları da temizler),
+      // buradaki delete sadece yedek.
+      allow create: if isAdmin()
+                    && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if isAdmin()
+                    && request.resource.data.createdBy == resource.data.createdBy
+                    && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if isAdmin();
+
+      // Üyelik sadece setGroupMembership ile yazılır; groupIds aynasıyla
+      // birlikte atomik güncellenir.
+      match /members/{userId} {
+        allow read: if isAdmin() || isGroupMember(groupId);
+        allow write: if false;
+      }
+
+      match /messages/{messageId} {
+        allow read: if isAdmin() || isGroupMember(groupId);
+
+        allow create: if (isAdmin() || isGroupMember(groupId))
+                      && request.resource.data.senderId == request.auth.uid
+                      && request.resource.data.content is string
+                      && (request.resource.data.content.size() > 0
+                          || request.resource.data.attachments.size() > 0)
+                      && request.resource.data.attachments.size() <= 5;
+
+        // Mesaj düzenlenemez.
+        allow update: if false;
+
+        allow delete: if isAdmin()
+                      || (isGroupMember(groupId)
+                          && resource.data.senderId == request.auth.uid);
+      }
+
+      // Admin'in yüklediği duyuru ekleri.
+      match /announcements/{document=**} {
+        allow read: if isAdmin() || isGroupMember(groupId);
+        allow write: if isAdmin();
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if canReadAnnouncement(resource.data);
+
+      allow create: if isAdmin()
+                    && request.resource.data.createdBy == request.auth.uid
+                    && request.resource.data.publishedAt <= request.time
+                    && (request.resource.data.expiresAt == null
+                        || request.resource.data.expiresAt > request.resource.data.publishedAt)
+                    && validAnnouncement(request.resource.data);
+
+      allow update: if isAdmin()
+                    && validAnnouncement(request.resource.data)
+                    && request.resource.data.createdBy == resource.data.createdBy
+                    && request.resource.data.createdAt == resource.data.createdAt;
+
+      allow delete: if isAdmin();
+
+      // readCount sadece sunucuda artar.
+      match /reads/{userId} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    // Fan-out yok, istemci limit'li okur.
+    match /broadcasts/{broadcastId} {
+      allow read: if isActiveUser();
+      allow create, update, delete: if isAdmin()
+                                   && request.resource.data.createdBy == request.auth.uid;
+    }
+
+    match /counters/{document=**} {
+      allow read, write: if false;
+    }
+
+    // Geri kalan her şey kapalı.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

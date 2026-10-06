@@ -1,0 +1,120 @@
+rules_version = '2';
+
+// Firestore kuralları users/{uid} dokümanına bakarak yetki verir ama Storage
+// emülatörü Firestore'un verisini göremez, yani bu kurallar doküman
+// okuyarak test edilemezdi. Bu yüzden Storage tarafı tamamen token
+// claim'lerine dayanır: role, active, groupIds. Cloud Functions bunları
+// üyelik/rol değişince günceller; istemci token'ı tazeleyene kadar dosya
+// erişimi bayat kalabilir (en fazla ~1 saat). Veri erişimi anında kesilir,
+// dosya erişimi gecikmeli — bilinçli takas, ayrıntı ARCHITECTURE.md'de.
+//
+// Boyut ve içerik tipi kontrolleri de burada, istemciye güvenmiyoruz.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function claims() {
+      return request.auth.token;
+    }
+
+    function isAdmin() {
+      return signedIn()
+             && claims().role == 'admin'
+             && claims().active == true;
+    }
+
+    function isActiveUser() {
+      return signedIn() && claims().active == true;
+    }
+
+    function isGroupMember(groupId) {
+      return isActiveUser()
+             && claims().groupIds != null
+             && claims().groupIds.hasAny([groupId]);
+    }
+
+    // Emülatör yazma isteklerinde metadata'yı doldurmuyor; null metadata'lı
+    // yazma burada reddedilir (güvenli varsayılan), kural patlamaz.
+    function hasMetadata() {
+      return request.resource != null;
+    }
+
+    function contentType() {
+      return hasMetadata() ? request.resource.contentType : null;
+    }
+
+    // `==` zinciri kasıtlı: kural dilinde null'u `in [...]` içine koymak
+    // çalışma zamanında patlıyor, `null == 'x'` ise sessizce false.
+    function isImage() {
+      return hasMetadata()
+             && (contentType() == 'image/jpeg'
+               || contentType() == 'image/png'
+               || contentType() == 'image/webp'
+               || contentType() == 'image/gif'
+               || contentType() == 'image/heic'
+               || contentType() == 'image/heif');
+    }
+
+    function isDocument() {
+      return hasMetadata()
+             && (contentType() == 'application/pdf'
+               || contentType() == 'application/msword'
+               || contentType() == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+               || contentType() == 'application/vnd.ms-excel'
+               || contentType() == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+               || contentType() == 'application/vnd.ms-powerpoint'
+               || contentType() == 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+    }
+
+    function under10Mb() {
+      return hasMetadata() && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    function under5Mb() {
+      return hasMetadata() && request.resource.size < 5 * 1024 * 1024;
+    }
+
+    match /users/{userId}/profile/{fileName} {
+      allow read: if isAdmin()
+                  || (isActiveUser() && signedIn() && request.auth.uid == userId);
+      allow create, update: if (isAdmin()
+                                || (isActiveUser() && signedIn() && request.auth.uid == userId))
+                            && isImage()
+                            && under5Mb();
+      // Silmede request.resource yok; o yüzden ayrı kural.
+      allow delete: if isAdmin() || (isActiveUser() && signedIn() && request.auth.uid == userId);
+    }
+
+    // Duyuru görselleri / ekleri.
+    match /announcements/{announcementId}/{fileName} {
+      allow read: if isAdmin() || isActiveUser();
+      allow create, update: if isAdmin() && (isImage() || isDocument()) && under10Mb();
+      allow delete: if isAdmin();
+    }
+
+    // Grup duyuru ekleri: admin yazar, üye okur.
+    match /groups/{groupId}/announcements/{fileName} {
+      allow read: if isAdmin() || isGroupMember(groupId);
+      allow create, update: if isAdmin() && (isImage() || isDocument()) && under10Mb();
+      allow delete: if isAdmin();
+    }
+
+    // Mesaj ekleri: üye yükler. Silme admin'de; ekler mesajla birlikte
+    // temizlenir, üçüncü tarafa silme yetkisi verilmez.
+    match /groups/{groupId}/messages/{messageId}/attachments/{fileName} {
+      allow read: if isAdmin() || isGroupMember(groupId);
+      allow create, update: if (isAdmin() || isGroupMember(groupId))
+                            && (isImage() || isDocument())
+                            && under10Mb();
+      allow delete: if isAdmin();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
